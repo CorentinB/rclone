@@ -249,7 +249,8 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err != nil {
 		return nil, err
 	}
-	stat, err := cn.smbShare.Stat(f.toSambaPath(dir))
+	_, cnShare := cn.withContext(ctx)
+	stat, err := cnShare.Stat(f.toSambaPath(dir))
 	f.putConnection(&cn, err)
 	if err != nil {
 		// ignore stat error here
@@ -310,7 +311,8 @@ func (f *Fs) findObjectSeparate(ctx context.Context, share, path string) (fs.Obj
 	if err != nil {
 		return nil, err
 	}
-	stat, err := cn.smbShare.Stat(f.toSambaPath(path))
+	_, cnShare := cn.withContext(ctx)
+	stat, err := cnShare.Stat(f.toSambaPath(path))
 	f.putConnection(&cn, err)
 	if err != nil {
 		return nil, translateError(err, false)
@@ -332,7 +334,8 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) (err error) {
 	if err != nil {
 		return err
 	}
-	err = cn.smbShare.MkdirAll(f.toSambaPath(path), 0o755)
+	_, cnShare := cn.withContext(ctx)
+	err = cnShare.MkdirAll(f.toSambaPath(path), 0o755)
 	f.putConnection(&cn, err)
 	return err
 }
@@ -347,7 +350,8 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
-	err = cn.smbShare.Remove(f.toSambaPath(path))
+	_, cnShare := cn.withContext(ctx)
+	err = cnShare.Remove(f.toSambaPath(path))
 	f.putConnection(&cn, err)
 	return err
 }
@@ -417,7 +421,8 @@ func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (_ fs.Objec
 	if err != nil {
 		return nil, err
 	}
-	err = cn.smbShare.Rename(f.toSambaPath(srcPath), f.toSambaPath(dstPath))
+	_, cnShare := cn.withContext(ctx)
+	err = cnShare.Rename(f.toSambaPath(srcPath), f.toSambaPath(dstPath))
 	f.putConnection(&cn, err)
 	if err != nil {
 		return nil, translateError(err, false)
@@ -456,14 +461,15 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 		return err
 	}
 	defer f.putConnection(&cn, err)
+	_, cnShare := cn.withContext(ctx)
 
-	_, err = cn.smbShare.Stat(f.toSambaPath(dstPath))
+	_, err = cnShare.Stat(f.toSambaPath(dstPath))
 	if err == nil {
 		return fs.ErrorDirExists
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("failed to check destination directory: %w", err)
 	}
-	err = cn.smbShare.Rename(f.toSambaPath(srcPath), f.toSambaPath(dstPath))
+	err = cnShare.Rename(f.toSambaPath(srcPath), f.toSambaPath(dstPath))
 	return translateError(err, true)
 }
 
@@ -476,9 +482,10 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 		return nil, err
 	}
 	defer f.putConnection(&cn, err)
+	cnSession, cnShare := cn.withContext(ctx)
 
 	if share == "" {
-		shares, err := cn.smbSession.ListSharenames()
+		shares, err := cnSession.ListSharenames()
 		for _, shh := range shares {
 			shh = f.toNativePath(shh)
 			if strings.HasSuffix(shh, "$") && f.opt.HideSpecial {
@@ -489,7 +496,7 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 		return entries, err
 	}
 
-	dirents, err := cn.smbShare.ReadDir(f.toSambaPath(_path))
+	dirents, err := cnShare.ReadDir(f.toSambaPath(_path))
 	if err != nil {
 		return entries, translateError(err, true)
 	}
@@ -518,7 +525,8 @@ func (f *Fs) About(ctx context.Context) (_ *fs.Usage, err error) {
 	if err != nil {
 		return nil, err
 	}
-	stat, err := cn.smbShare.Statfs(dir)
+	_, cnShare := cn.withContext(ctx)
+	stat, err := cnShare.Statfs(dir)
 	f.putConnection(&cn, err)
 	if err != nil {
 		return nil, err
@@ -621,7 +629,8 @@ func (f *Fs) OpenWriterAt(ctx context.Context, remote string, size int64) (fs.Wr
 	if err != nil {
 		return nil, err
 	}
-	file, err := cn.smbShare.OpenFile(smbPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	_, cnShare := cn.withContext(ctx)
+	file, err := cnShare.OpenFile(smbPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		o.fs.putConnection(&cn, err)
 		return nil, err
@@ -675,7 +684,8 @@ func (f *Fs) ensureDirectory(ctx context.Context, share, _path string) error {
 	if err != nil {
 		return err
 	}
-	err = cn.smbShare.MkdirAll(f.toSambaPath(dir), 0o755)
+	_, cnShare := cn.withContext(ctx)
+	err = cnShare.MkdirAll(f.toSambaPath(dir), 0o755)
 	f.putConnection(&cn, err)
 	return err
 }
@@ -725,13 +735,14 @@ func (o *Object) SetModTime(ctx context.Context, t time.Time) (err error) {
 		return err
 	}
 	defer o.fs.putConnection(&cn, err)
+	_, cnShare := cn.withContext(ctx)
 
-	err = cn.smbShare.Chtimes(reqDir, t, t)
+	err = cnShare.Chtimes(reqDir, t, t)
 	if err != nil {
 		return err
 	}
 
-	fi, err := cn.smbShare.Stat(reqDir)
+	fi, err := cnShare.Stat(reqDir)
 	if err != nil {
 		return fmt.Errorf("SetModTime: stat: %w", err)
 	}
@@ -768,7 +779,8 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	if err != nil {
 		return nil, err
 	}
-	fl, err := cn.smbShare.OpenFile(filename, os.O_RDONLY, 0)
+	_, cnShare := cn.withContext(ctx)
+	fl, err := cnShare.OpenFile(filename, os.O_RDONLY, 0)
 	if err != nil {
 		o.fs.putConnection(&cn, err)
 		return nil, fmt.Errorf("failed to open: %w", err)
@@ -821,7 +833,14 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		o.fs.putConnection(&cn, err)
 	}()
 
-	fl, err := cn.smbShare.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	// The file is opened on a share that outlives cancellation of ctx (for
+	// cleanupGracePeriod) so that Close and Remove below can still reach
+	// the server if the upload is cancelled; the upload itself stays
+	// cancellable because in is wrapped with a context-checking reader.
+	cnShare, cancelCleanup := cn.withCleanupContext(ctx)
+	defer cancelCleanup()
+
+	fl, err := cnShare.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open: %w", err)
 	}
@@ -835,7 +854,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 			// try to remove the file anyway; the file may be already closed
 		}
 
-		removeErr = cn.smbShare.Remove(filename)
+		removeErr = cnShare.Remove(filename)
 		if removeErr != nil {
 			fs.Debugf(src, "failed to remove: %v", removeErr)
 		} else {
@@ -843,7 +862,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 	}
 
-	_, err = fl.ReadFrom(in)
+	_, err = fl.ReadFrom(readers.NewContextReader(ctx, in))
 	if err != nil {
 		remove()
 		return fmt.Errorf("Update ReadFrom failed: %w", err)
@@ -881,8 +900,9 @@ func (o *Object) Remove(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	_, cnShare := cn.withContext(ctx)
 
-	err = cn.smbShare.Remove(filename)
+	err = cnShare.Remove(filename)
 	o.fs.putConnection(&cn, err)
 
 	return err
