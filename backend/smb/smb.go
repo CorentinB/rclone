@@ -99,6 +99,22 @@ Set to 0 to keep connections indefinitely.
 `,
 			Advanced: true,
 		}, {
+			Name: "connections",
+			Help: strings.ReplaceAll(`Maximum number of SMB simultaneous connections, 0 for unlimited.
+
+Note that setting this too low may cause deadlocks.
+
+For a sync or copy without |--check-first|, allow one connection for each
+checker and transfer, plus one spare connection. Multithreaded transfers can
+use up to |--multi-thread-streams| connections instead of one. Include these
+extra connections in the limit.
+
+With |--check-first|, allow one connection for the larger of the checker and
+transfer connection counts, plus one spare connection.
+`, "|", "`"),
+			Default:  0,
+			Advanced: true,
+		}, {
 			Name:     "hide_special_share",
 			Help:     "Hide special shares (e.g. print$) which users aren't supposed to access.",
 			Default:  true,
@@ -156,6 +172,7 @@ type Options struct {
 	HideSpecial     bool        `config:"hide_special_share"`
 	CaseInsensitive bool        `config:"case_insensitive"`
 	IdleTimeout     fs.Duration `config:"idle_timeout"`
+	Connections     int         `config:"connections"`
 
 	Enc encoder.MultiEncoder `config:"encoding"`
 }
@@ -172,6 +189,7 @@ type Fs struct {
 	poolMu   sync.Mutex
 	pool     []*conn
 	drain    *time.Timer // used to drain the pool when we stop using the connections
+	tokens   *pacer.TokenDispenser
 
 	ctx context.Context
 }
@@ -198,10 +216,11 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	root = strings.Trim(root, "/")
 
 	f := &Fs{
-		name: name,
-		opt:  *opt,
-		ctx:  ctx,
-		root: root,
+		name:   name,
+		opt:    *opt,
+		ctx:    ctx,
+		root:   root,
+		tokens: pacer.NewTokenDispenser(opt.Connections),
 	}
 	f.features = (&fs.Features{
 		CaseInsensitive:         opt.CaseInsensitive,

@@ -14,9 +14,56 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/object"
 	"github.com/rclone/rclone/fstest"
+	"github.com/rclone/rclone/lib/pacer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConnectionLimit(t *testing.T) {
+	ctx := context.Background()
+	pooled := &conn{}
+	f := &Fs{
+		opt:    Options{Connections: 1},
+		pool:   []*conn{pooled},
+		tokens: pacer.NewTokenDispenser(1),
+	}
+
+	first, err := f.getConnection(ctx, "")
+	require.NoError(t, err)
+	require.Same(t, pooled, first)
+
+	type result struct {
+		conn *conn
+		err  error
+	}
+	started := make(chan struct{})
+	secondResult := make(chan result, 1)
+	go func() {
+		close(started)
+		second, err := f.getConnection(ctx, "")
+		secondResult <- result{conn: second, err: err}
+	}()
+	<-started
+
+	select {
+	case result := <-secondResult:
+		t.Fatalf("second connection returned before first was released: %v", result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	f.putConnection(&first, nil)
+
+	select {
+	case result := <-secondResult:
+		require.NoError(t, result.err)
+		require.Same(t, pooled, result.conn)
+		f.putConnection(&result.conn, nil)
+	case <-time.After(time.Second):
+		t.Fatal("second connection did not return after first was released")
+	}
+
+	require.Len(t, f.pool, 1)
+}
 
 func TestDialClosesConnectionOnSetupError(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

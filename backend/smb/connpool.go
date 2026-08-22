@@ -164,6 +164,9 @@ func (c *conn) mountShare(share string) (err error) {
 // Get a SMB connection from the pool, or open a new one
 func (f *Fs) getConnection(ctx context.Context, share string) (c *conn, err error) {
 	accounting.LimitTPS(ctx)
+	if f.opt.Connections > 0 {
+		f.tokens.Get()
+	}
 	f.poolMu.Lock()
 	for len(f.pool) > 0 {
 		c = f.pool[0]
@@ -186,6 +189,9 @@ func (f *Fs) getConnection(ctx context.Context, share string) (c *conn, err erro
 		}
 		return false, nil
 	})
+	if f.opt.Connections > 0 && c == nil {
+		f.tokens.Put()
+	}
 	return c, err
 }
 
@@ -202,6 +208,9 @@ func (f *Fs) putConnection(pc **conn, err error) {
 	c := *pc
 	if c == nil {
 		return
+	}
+	if f.opt.Connections > 0 {
+		defer f.tokens.Put()
 	}
 	*pc = nil
 	if err != nil {
