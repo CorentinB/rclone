@@ -808,6 +808,14 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	return in, nil
 }
 
+type fillReader struct {
+	in io.Reader
+}
+
+func (r fillReader) Read(p []byte) (int, error) {
+	return readers.ReadFill(r.in, p)
+}
+
 // Update the Object from in with modTime and size
 func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (err error) {
 	share, filename := o.split()
@@ -862,7 +870,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 		}
 	}
 
-	_, err = fl.ReadFrom(readers.NewContextReader(ctx, in))
+	_, err = fl.ReadFrom(fillReader{in: readers.NewContextReader(ctx, in)})
 	if err != nil {
 		remove()
 		return fmt.Errorf("Update ReadFrom failed: %w", err)

@@ -14,6 +14,7 @@ import (
 type FsInterface interface {
 	getConnection(ctx context.Context, share string) (*conn, error)
 	putConnection(pc **conn, err error)
+	discardConnection(pc **conn)
 	removeSession()
 }
 
@@ -72,8 +73,11 @@ func (p *filePool) put(f *file, err error) {
 	}
 
 	if err != nil {
-		_ = f.Close()
-		p.fs.putConnection(&f.c, err)
+		if closeErr := f.Close(); closeErr != nil {
+			p.fs.discardConnection(&f.c)
+		} else {
+			p.fs.putConnection(&f.c, err)
+		}
 		return
 	}
 
@@ -92,7 +96,11 @@ func (p *filePool) drain() error {
 	for _, f := range files {
 		g.Go(func() error {
 			err := f.Close()
-			p.fs.putConnection(&f.c, err)
+			if err != nil {
+				p.fs.discardConnection(&f.c)
+			} else {
+				p.fs.putConnection(&f.c, nil)
+			}
 			return err
 		})
 	}

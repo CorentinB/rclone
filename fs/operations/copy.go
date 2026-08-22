@@ -242,14 +242,6 @@ func (c *copy) updateOrPut(ctx context.Context, in io.ReadCloser, uploadOptions 
 
 // Do a manual copy by reading the bytes and writing them
 func (c *copy) manualCopy(ctx context.Context) (actionTaken string, newDst fs.Object, err error) {
-	// Remove partial files on premature exit
-	if !c.inplace {
-		defer atexit.Unregister(atexit.Register(func() {
-			ctx := context.Background()
-			c.removeFailedPartialCopy(ctx, c.f, c.remoteForCopy)
-		}))
-	}
-
 	// Options for the upload
 	uploadOptions := []fs.OpenOption{c.hashOption}
 	for _, option := range c.ci.UploadHeaders {
@@ -310,6 +302,23 @@ func (c *copy) verify(ctx context.Context, newDst fs.Object) (err error) {
 // It returns the destination object if possible.  Note that this may
 // be nil.
 func (c *copy) copy(ctx context.Context) (newDst fs.Object, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	copyDone := make(chan struct{})
+	defer close(copyDone)
+	handle := atexit.Register(func() {
+		cancel()
+		select {
+		case <-copyDone:
+		case <-time.After(30 * time.Second):
+			fs.Debugf(c.src, "Timed out waiting for active copy to stop")
+		}
+		if !c.inplace {
+			c.removeFailedPartialCopy(context.Background(), c.f, c.remoteForCopy)
+		}
+	})
+	defer atexit.Unregister(handle)
+
 	var actionTaken string
 	retry := true
 	for tries := 0; retry && tries < c.maxTries; tries++ {

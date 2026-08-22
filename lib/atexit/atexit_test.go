@@ -20,6 +20,23 @@ func (*fakeSignal) Signal() {
 
 var _ os.Signal = (*fakeSignal)(nil)
 
+func TestOrderedFns(t *testing.T) {
+	first := func() {}
+	second := func() {}
+	third := func() {}
+	firstHandle := FnHandle(&first)
+	secondHandle := FnHandle(&second)
+	thirdHandle := FnHandle(&third)
+
+	ordered := orderedFns(map[FnHandle]uint64{
+		firstHandle:  1,
+		thirdHandle:  3,
+		secondHandle: 2,
+	})
+
+	assert.Equal(t, []FnHandle{thirdHandle, secondHandle, firstHandle}, ordered)
+}
+
 func TestExitCode(t *testing.T) {
 	switch runtime.GOOS {
 	case "windows", "plan9":

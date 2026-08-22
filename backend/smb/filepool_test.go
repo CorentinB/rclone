@@ -12,20 +12,28 @@ import (
 
 // Mock Fs that implements FsInterface
 type mockFs struct {
-	mu                  sync.Mutex
-	putConnectionCalled bool
-	putConnectionErr    error
-	getConnectionCalled bool
-	getConnectionErr    error
-	getConnectionResult *conn
-	removeSessionCalled bool
+	mu                      sync.Mutex
+	putConnectionCalled     bool
+	discardConnectionCalled bool
+	getConnectionCalled     bool
+	getConnectionErr        error
+	getConnectionResult     *conn
+	removeSessionCalled     bool
 }
 
 func (m *mockFs) putConnection(pc **conn, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.putConnectionCalled = true
-	m.putConnectionErr = err
+}
+
+func (m *mockFs) discardConnection(pc **conn) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.discardConnectionCalled = true
+	if pc != nil {
+		*pc = nil
+	}
 }
 
 func (m *mockFs) getConnection(ctx context.Context, share string) (*conn, error) {
@@ -53,10 +61,10 @@ func (m *mockFs) isPutConnectionCalled() bool {
 	return m.putConnectionCalled
 }
 
-func (m *mockFs) getPutConnectionErr() error {
+func (m *mockFs) isDiscardConnectionCalled() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.putConnectionErr
+	return m.discardConnectionCalled
 }
 
 func (m *mockFs) isGetConnectionCalled() bool {
@@ -156,9 +164,8 @@ func TestFilePool_Put_WithError(t *testing.T) {
 
 	pool.put(mockFile, errors.New("write error"))
 
-	// Should call putConnection with error
-	assert.True(t, fs.isPutConnectionCalled())
-	assert.Equal(t, errors.New("write error"), fs.getPutConnectionErr())
+	assert.False(t, fs.isPutConnectionCalled())
+	assert.True(t, fs.isDiscardConnectionCalled())
 	assert.Empty(t, pool.pool)
 }
 

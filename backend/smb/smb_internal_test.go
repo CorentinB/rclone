@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	smb2 "github.com/cloudsoda/go-smb2"
@@ -92,6 +93,40 @@ func TestConnWithContextNilShare(t *testing.T) {
 	session, share := c.withContext(context.Background())
 	assert.NotNil(t, session)
 	assert.Nil(t, share)
+}
+
+func TestFillReader(t *testing.T) {
+	r := fillReader{in: iotest.OneByteReader(strings.NewReader("abcdef"))}
+	buf := make([]byte, 4)
+
+	n, err := r.Read(buf)
+	require.NoError(t, err)
+	assert.Equal(t, 4, n)
+	assert.Equal(t, "abcd", string(buf))
+
+	n, err = r.Read(buf)
+	assert.Equal(t, io.EOF, err)
+	assert.Equal(t, 2, n)
+	assert.Equal(t, "ef", string(buf[:n]))
+}
+
+func TestCleanupContextGrace(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	cleanupCtx, cancelCleanup := newCleanupContext(parent, 20*time.Millisecond)
+	defer cancelCleanup()
+
+	cancelParent()
+	select {
+	case <-cleanupCtx.Done():
+		t.Fatal("cleanup context ended without its grace period")
+	default:
+	}
+
+	select {
+	case <-cleanupCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("cleanup context did not end after its grace period")
+	}
 }
 
 func TestDialClosesConnectionOnSetupError(t *testing.T) {

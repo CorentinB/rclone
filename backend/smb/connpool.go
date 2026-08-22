@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	smb2 "github.com/cloudsoda/go-smb2"
@@ -114,19 +115,40 @@ func (c *conn) withContext(ctx context.Context) (session *smb2.Session, share *s
 	return session, share
 }
 
-// cleanupGracePeriod bounds how long a withCleanupContext-bound share
-// remains usable after the caller's ctx has been cancelled, so cleanup
-// requests (closing or removing a file) have a chance to reach the server.
+// cleanupGracePeriod bounds how long cleanup I/O may continue after the
+// operation context is cancelled.
 const cleanupGracePeriod = 30 * time.Second
 
-// withCleanupContext returns a share which stays usable for
-// cleanupGracePeriod after ctx is cancelled, so that a file opened on it
-// can still be closed or removed even if the operation that opened it was
-// cancelled. It does not itself watch ctx for cancellation - callers that
-// need the operation to be interruptible must check ctx themselves, e.g.
-// by wrapping the reader or writer with readers.NewContextReader.
-func (c *conn) withCleanupContext(ctx context.Context) (share *smb2.Share, cancel func()) {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupGracePeriod)
+// newCleanupContext follows ctx until cancellation, then allows grace before
+// it expires. Calling cancel stops it immediately.
+func newCleanupContext(ctx context.Context, grace time.Duration) (cleanupCtx context.Context, cancel context.CancelFunc) {
+	cleanupCtx, cancelCtx := context.WithCancel(context.WithoutCancel(ctx))
+	var mu sync.Mutex
+	var timer *time.Timer
+	finished := false
+	stop := context.AfterFunc(ctx, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !finished {
+			timer = time.AfterFunc(grace, cancelCtx)
+		}
+	})
+	return cleanupCtx, func() {
+		stop()
+		mu.Lock()
+		finished = true
+		if timer != nil {
+			timer.Stop()
+		}
+		mu.Unlock()
+		cancelCtx()
+	}
+}
+
+// withCleanupContext returns a share that remains usable briefly after ctx is
+// cancelled so open files can close before failed uploads are removed.
+func (c *conn) withCleanupContext(ctx context.Context) (share *smb2.Share, cancel context.CancelFunc) {
+	cleanupCtx, cancel := newCleanupContext(ctx, cleanupGracePeriod)
 	if c.smbShare == nil {
 		return nil, cancel
 	}
@@ -223,6 +245,21 @@ func (f *Fs) getConnection(ctx context.Context, share string) (c *conn, err erro
 		f.tokens.Put()
 	}
 	return c, err
+}
+
+// discardConnection closes a connection instead of returning it to the pool.
+func (f *Fs) discardConnection(pc **conn) {
+	if pc == nil || *pc == nil {
+		return
+	}
+	c := *pc
+	*pc = nil
+	if f.opt.Connections > 0 {
+		defer f.tokens.Put()
+	}
+	if err := c.close(); err != nil {
+		fs.Debugf(f, "Failed to close discarded SMB connection: %v", err)
+	}
 }
 
 // Return a SMB connection to the pool

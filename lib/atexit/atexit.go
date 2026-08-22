@@ -7,6 +7,7 @@ package atexit
 import (
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -14,8 +15,9 @@ import (
 )
 
 var (
-	fns          = make(map[FnHandle]bool)
+	fns          = make(map[FnHandle]uint64)
 	fnsMutex     sync.Mutex
+	fnSequence   uint64
 	exitChan     chan os.Signal
 	exitOnce     sync.Once
 	registerOnce sync.Once
@@ -34,7 +36,8 @@ func Register(fn func()) FnHandle {
 		return nil
 	}
 	fnsMutex.Lock()
-	fns[&fn] = true
+	fnSequence++
+	fns[&fn] = fnSequence
 	fnsMutex.Unlock()
 
 	// Run AtExit handlers on exitSignals so everything gets tidied up properly
@@ -91,6 +94,25 @@ func IgnoreSignals() {
 	}
 }
 
+func orderedFns(registrations map[FnHandle]uint64) []FnHandle {
+	type registration struct {
+		fn       FnHandle
+		sequence uint64
+	}
+	ordered := make([]registration, 0, len(registrations))
+	for fn, sequence := range registrations {
+		ordered = append(ordered, registration{fn: fn, sequence: sequence})
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i].sequence > ordered[j].sequence
+	})
+	result := make([]FnHandle, len(ordered))
+	for i, registration := range ordered {
+		result[i] = registration.fn
+	}
+	return result
+}
+
 // Run all the at exit functions if they haven't been run already
 func Run() {
 	runCalled.Store(1)
@@ -100,7 +122,7 @@ func Run() {
 	fnsMutex.Lock()
 	defer fnsMutex.Unlock()
 	exitOnce.Do(func() {
-		for fnHandle := range fns {
+		for _, fnHandle := range orderedFns(fns) {
 			(*fnHandle)()
 		}
 	})
