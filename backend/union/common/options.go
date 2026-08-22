@@ -8,6 +8,7 @@ import "github.com/rclone/rclone/fs"
 // Options defines the configuration for this backend
 type Options struct {
 	Upstreams    fs.SpaceSepList `config:"upstreams"`
+	UsageSources fs.SpaceSepList `config:"usage_sources"`
 	Remotes      fs.SpaceSepList `config:"remotes"` // Deprecated
 	ActionPolicy string          `config:"action_policy"`
 	CreatePolicy string          `config:"create_policy"`

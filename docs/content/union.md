@@ -167,6 +167,22 @@ your upstreams support the respective quota fields.
 To check if your upstream supports the field, run `rclone about remote: [flags]`
 and see if the required field exists.
 
+Use `usage_sources` when the data upstreams do not expose the required fields.
+This setting maps each upstream to a separate remote that supplies only `About`
+information. It must contain one remote for each upstream in the same order.
+All file operations still use `upstreams`.
+
+```ini
+[union]
+type = union
+upstreams = fast-data-1: fast-data-2:
+usage_sources = quota-1: quota-2:
+create_policy = mfs
+```
+
+In this example, Union writes files through `fast-data-1:` and `fast-data-2:`.
+It obtains free-space values from `quota-1:` and `quota-2:`.
+
 ### Filters
 
 Policies basically search upstream remotes and create a list of files / paths for
@@ -300,6 +316,22 @@ Properties:
 ### Advanced options
 
 Here are the Advanced options specific to union (Union merges the contents of several upstream fs).
+
+#### --union-usage-sources
+
+Optional list of remotes that supply usage information for the corresponding upstreams.
+
+The list must contain one usage source for each upstream, in the same order.
+Union uses these remotes only for About information such as free and used
+space. All file operations continue to use the configured upstreams. Each
+usage source must support About.
+
+Properties:
+
+- Config:      usage_sources
+- Env Var:     RCLONE_UNION_USAGE_SOURCES
+- Type:        string
+- Required:    false
 
 #### --union-min-free-space
 

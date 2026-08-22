@@ -28,6 +28,7 @@ var (
 type Fs struct {
 	fs.Fs
 	RootFs      fs.Fs
+	usageFs     fs.Fs
 	RootPath    string
 	Opt         *common.Options
 	writable    bool
@@ -67,7 +68,7 @@ type Entry interface {
 
 // New creates a new Fs based on the
 // string formatted `type:root_path(:ro/:nc)`
-func New(ctx context.Context, remote, root string, opt *common.Options) (*Fs, error) {
+func New(ctx context.Context, remote, root, usageSource string, opt *common.Options) (*Fs, error) {
 	configName, fsPath, err := fspath.SplitFs(remote)
 	if err != nil {
 		return nil, err
@@ -99,6 +100,17 @@ func New(ctx context.Context, remote, root string, opt *common.Options) (*Fs, er
 		return nil, err
 	}
 	f.RootFs = rFs
+	f.usageFs = rFs
+	if usageSource != "" {
+		usageFs, err := cache.Get(ctx, usageSource)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create usage source %q: %w", usageSource, err)
+		}
+		if usageFs.Features().About == nil {
+			return nil, fmt.Errorf("usage source %q does not support About", usageSource)
+		}
+		f.usageFs = usageFs
+	}
 	rootString := fspath.JoinRootPath(remote, root)
 	myFs, err := cache.Get(ctx, rootString)
 	if err != nil && err != fs.ErrorIsFile {
@@ -454,7 +466,7 @@ func (f *Fs) GetNumObjects() (int64, error) {
 }
 
 func (f *Fs) updateUsage() (err error) {
-	if do := f.RootFs.Features().About; do == nil {
+	if do := f.usageFs.Features().About; do == nil {
 		return ErrUsageFieldNotSupported
 	}
 	done := false
@@ -481,7 +493,7 @@ func (f *Fs) updateUsageCore(lock bool) error {
 	// Run in background, should not be cancelled by user
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	usage, err := f.RootFs.Features().About(ctx)
+	usage, err := f.usageFs.Features().About(ctx)
 	if err != nil {
 		f.cacheUpdate = false
 		if errors.Is(err, fs.ErrorDirNotFound) {

@@ -38,6 +38,15 @@ func init() {
 			Help:     "List of space separated upstreams.\n\nCan be 'upstreama:test/dir upstreamb:', '\"upstreama:test/space:ro dir\" upstreamb:', etc.",
 			Required: true,
 		}, {
+			Name: "usage_sources",
+			Help: `Optional list of remotes that supply usage information for the corresponding upstreams.
+
+The list must contain one usage source for each upstream, in the same order.
+Union uses these remotes only for About information such as free and used
+space. All file operations continue to use the configured upstreams. Each
+usage source must support About.`,
+			Advanced: true,
+		}, {
 			Name:    "action_policy",
 			Help:    "Policy to choose upstream on ACTION category.",
 			Default: "epall",
@@ -913,9 +922,17 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if len(opt.Upstreams) == 1 {
 		return nil, errors.New("union can't point to a single upstream - check the value of the upstreams setting")
 	}
+	if len(opt.UsageSources) != 0 && len(opt.UsageSources) != len(opt.Upstreams) {
+		return nil, fmt.Errorf("usage_sources must contain one remote for each upstream: got %d usage sources for %d upstreams", len(opt.UsageSources), len(opt.Upstreams))
+	}
 	for _, u := range opt.Upstreams {
 		if strings.HasPrefix(u, name+":") {
 			return nil, errors.New("can't point union remote at itself - check the value of the upstreams setting")
+		}
+	}
+	for _, u := range opt.UsageSources {
+		if strings.HasPrefix(u, name+":") {
+			return nil, errors.New("can't use union remote itself as a usage source - check the value of the usage_sources setting")
 		}
 	}
 
@@ -924,7 +941,11 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	errs := Errors(make([]error, len(opt.Upstreams)))
 	multithread(len(opt.Upstreams), func(i int) {
 		u := opt.Upstreams[i]
-		upstreams[i], errs[i] = upstream.New(ctx, u, root, opt)
+		var usageSource string
+		if len(opt.UsageSources) != 0 {
+			usageSource = opt.UsageSources[i]
+		}
+		upstreams[i], errs[i] = upstream.New(ctx, u, root, usageSource, opt)
 	})
 	var usedUpstreams []*upstream.Fs
 	var fserr error
@@ -998,6 +1019,9 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 			canMove = false
 		}
 		slowHash = slowHash || f.Features().SlowHash
+	}
+	if len(opt.UsageSources) != 0 {
+		features.About = f.About
 	}
 	// We can move if all remotes support Move or Copy
 	if canMove {

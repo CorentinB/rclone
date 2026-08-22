@@ -79,6 +79,38 @@ func (f *Fs) InternalTest(t *testing.T) {
 
 var _ fstests.InternalTester = (*Fs)(nil)
 
+func TestUsageSources(t *testing.T) {
+	if *fstest.RemoteName != "" {
+		t.Skip("Skipping as -remote set")
+	}
+	ctx := context.Background()
+	dirs := MakeTestDirs(t, 2)
+
+	t.Run("CountMismatch", func(t *testing.T) {
+		fsString := fmt.Sprintf(":union,upstreams='%s %s',usage_sources='%s':", dirs[0], dirs[1], dirs[0])
+		_, err := fs.NewFs(ctx, fsString)
+		require.EqualError(t, err, "usage_sources must contain one remote for each upstream: got 1 usage sources for 2 upstreams")
+	})
+
+	t.Run("AboutUnsupported", func(t *testing.T) {
+		fsString := fmt.Sprintf(":union,upstreams='%s %s',usage_sources=':memory:usage-a :memory:usage-b':", dirs[0], dirs[1])
+		_, err := fs.NewFs(ctx, fsString)
+		require.ErrorContains(t, err, "does not support About")
+	})
+
+	t.Run("ExternalAbout", func(t *testing.T) {
+		fsString := fmt.Sprintf(":union,upstreams=':memory:usage-data-a :memory:usage-data-b',usage_sources='%s %s':", dirs[0], dirs[1])
+		f, err := fs.NewFs(ctx, fsString)
+		require.NoError(t, err)
+		require.NotNil(t, f.Features().About)
+
+		usage, err := f.Features().About(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, usage.Free)
+		assert.Positive(t, *usage.Free)
+	})
+}
+
 // This specifically tests a union of local which can Move but not
 // Copy and :memory: which can Copy but not Move to makes sure that
 // the resulting union can Move
