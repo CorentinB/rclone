@@ -38,9 +38,10 @@ type Fs struct {
 	cacheExpiry atomic.Int64  // usage cache expiry time
 	cacheMutex  sync.RWMutex
 	cacheOnce   sync.Once
-	cacheUpdate bool // if the cache is updating
-	writeback   bool // writeback to this upstream
-	writebackFs *Fs  // if non zero, writeback to this upstream
+	cacheUpdate atomic.Bool // if the cache is updating
+	reserved    int64       // space reserved by in-flight uploads
+	writeback   bool        // writeback to this upstream
+	writebackFs *Fs         // if non zero, writeback to this upstream
 }
 
 // Directory describes a wrapped Directory
@@ -205,6 +206,26 @@ func (f *Fs) IsCreatable() bool {
 // IsWritable return if the fs is allowed to write
 func (f *Fs) IsWritable() bool {
 	return f.writable
+}
+
+// ReserveSpace subtracts size from the free space visible to policies until
+// the returned release function is called. Non-positive sizes are ignored.
+func (f *Fs) ReserveSpace(size int64) (release func()) {
+	if size <= 0 {
+		return func() {}
+	}
+	f.cacheMutex.Lock()
+	f.reserved += size
+	f.cacheMutex.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.cacheMutex.Lock()
+			f.reserved -= size
+			f.cacheMutex.Unlock()
+		})
+	}
 }
 
 // Put in to the remote path with the modTime given of the given size
@@ -428,7 +449,10 @@ func (f *Fs) GetFreeSpace() (int64, error) {
 	if f.usage.Free == nil {
 		return math.MaxInt64 - 1, ErrUsageFieldNotSupported
 	}
-	return *f.usage.Free, nil
+	if f.reserved >= *f.usage.Free {
+		return 0, nil
+	}
+	return *f.usage.Free - f.reserved, nil
 }
 
 // GetUsedSpace get the used space of the fs
@@ -479,11 +503,10 @@ func (f *Fs) updateUsage() (err error) {
 	if done {
 		return err
 	}
-	if !f.cacheUpdate {
-		f.cacheUpdate = true
+	if f.cacheUpdate.CompareAndSwap(false, true) {
 		go func() {
+			defer f.cacheUpdate.Store(false)
 			_ = f.updateUsageCore(true)
-			f.cacheUpdate = false
 		}()
 	}
 	return nil
@@ -495,7 +518,6 @@ func (f *Fs) updateUsageCore(lock bool) error {
 	defer cancel()
 	usage, err := f.usageFs.Features().About(ctx)
 	if err != nil {
-		f.cacheUpdate = false
 		if errors.Is(err, fs.ErrorDirNotFound) {
 			err = nil
 		}

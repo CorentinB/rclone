@@ -11,6 +11,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestReserveSpace(t *testing.T) {
+	const initialFree = int64(1000)
+	f := &Fs{usage: &fs.Usage{Free: fs.NewUsageValue(initialFree)}}
+	f.cacheExpiry.Store(time.Now().Add(time.Minute).Unix())
+
+	releaseFirst := f.ReserveSpace(400)
+	free, err := f.GetFreeSpace()
+	require.NoError(t, err)
+	assert.Equal(t, int64(600), free)
+
+	releaseSecond := f.ReserveSpace(700)
+	free, err = f.GetFreeSpace()
+	require.NoError(t, err)
+	assert.Zero(t, free)
+
+	releaseFirst()
+	free, err = f.GetFreeSpace()
+	require.NoError(t, err)
+	assert.Equal(t, int64(300), free)
+
+	releaseFirst()
+	free, err = f.GetFreeSpace()
+	require.NoError(t, err)
+	assert.Equal(t, int64(300), free)
+
+	releaseSecond()
+	free, err = f.GetFreeSpace()
+	require.NoError(t, err)
+	assert.Equal(t, initialFree, free)
+
+	releaseIgnored := f.ReserveSpace(-1)
+	releaseIgnored()
+	free, err = f.GetFreeSpace()
+	require.NoError(t, err)
+	assert.Equal(t, initialFree, free)
+}
+
 func TestUsageSource(t *testing.T) {
 	ctx := context.Background()
 	dataFs, err := mockfs.NewFs(ctx, "data", "", nil)

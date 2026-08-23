@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,6 +79,119 @@ func (f *Fs) InternalTest(t *testing.T) {
 }
 
 var _ fstests.InternalTester = (*Fs)(nil)
+
+type reservationReader struct {
+	reader  *bytes.Reader
+	ready   *sync.WaitGroup
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (r *reservationReader) Read(p []byte) (n int, err error) {
+	r.once.Do(func() {
+		r.ready.Done()
+		<-r.release
+	})
+	return r.reader.Read(p)
+}
+
+func TestConcurrentMfsReservations(t *testing.T) {
+	if *fstest.RemoteName != "" {
+		t.Skip("Skipping as -remote set")
+	}
+	ctx := context.Background()
+	dirs := MakeTestDirs(t, 2)
+	nonce := time.Now().UnixNano()
+	fsString := fmt.Sprintf(":union,upstreams=':memory:reservation-data-a-%d :memory:reservation-data-b-%d',usage_sources='%s %s',create_policy=mfs,cache_time=3600:", nonce, nonce, dirs[0], dirs[1])
+	f, err := fs.NewFs(ctx, fsString)
+	require.NoError(t, err)
+	unionFs := f.(*Fs)
+
+	const (
+		files    = 20
+		fileSize = int64(1024 * 1024)
+	)
+	initialFree := make([]int64, len(unionFs.upstreams))
+	for i, u := range unionFs.upstreams {
+		initialFree[i], err = u.GetFreeSpace()
+		require.NoError(t, err)
+	}
+	freeDifference := initialFree[0] - initialFree[1]
+	if freeDifference < 0 {
+		freeDifference = -freeDifference
+	}
+	require.Less(t, freeDifference, fileSize)
+
+	var ready sync.WaitGroup
+	ready.Add(files)
+	release := make(chan struct{})
+	results := make(chan error, files)
+	for i := range files {
+		go func() {
+			name := fmt.Sprintf("file-%02d", i)
+			contents := bytes.Repeat([]byte{byte(i)}, int(fileSize))
+			in := &reservationReader{
+				reader:  bytes.NewReader(contents),
+				ready:   &ready,
+				release: release,
+			}
+			src := object.NewStaticObjectInfo(name, time.Now(), fileSize, true, nil, nil)
+			_, err := unionFs.Put(ctx, in, src)
+			results <- err
+		}()
+	}
+
+	allReady := make(chan struct{})
+	go func() {
+		ready.Wait()
+		close(allReady)
+	}()
+	select {
+	case <-allReady:
+	case <-time.After(10 * time.Second):
+		close(release)
+		for range files {
+			<-results
+		}
+		t.Fatal("timed out waiting for concurrent uploads to hold reservations")
+	}
+
+	for i, u := range unionFs.upstreams {
+		free, err := u.GetFreeSpace()
+		require.NoError(t, err)
+		assert.Equal(t, initialFree[i]-(files/2)*fileSize, free)
+	}
+
+	close(release)
+	for range files {
+		require.NoError(t, <-results)
+	}
+
+	freeBeforeFailure := make([]int64, len(unionFs.upstreams))
+	for i, u := range unionFs.upstreams {
+		entries, err := u.List(ctx, "")
+		require.NoError(t, err)
+		require.Len(t, entries, files/2)
+		freeBeforeFailure[i], err = u.GetFreeSpace()
+		require.NoError(t, err)
+		assert.Equal(t, initialFree[i]-int64(len(entries))*fileSize, freeBeforeFailure[i])
+	}
+
+	failedSrc := object.NewStaticObjectInfo("failed", time.Now(), fileSize, true, nil, nil)
+	_, err = unionFs.Put(ctx, errorReader{}, failedSrc)
+	require.Error(t, err)
+	for i, u := range unionFs.upstreams {
+		free, err := u.GetFreeSpace()
+		require.NoError(t, err)
+		assert.Equal(t, freeBeforeFailure[i], free)
+	}
+}
+
+type errorReader struct{}
+
+func (errorReader) Read([]byte) (int, error) {
+	return 0, assert.AnError
+}
 
 func TestUsageSources(t *testing.T) {
 	if *fstest.RemoteName != "" {

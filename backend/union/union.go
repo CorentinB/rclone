@@ -86,6 +86,7 @@ type Fs struct {
 	actionPolicy policy.Policy  // policy for ACTION
 	createPolicy policy.Policy  // policy for CREATE
 	searchPolicy policy.Policy  // policy for SEARCH
+	createMutex  sync.Mutex     // serialize create placement and space reservation
 }
 
 // Wrap candidate objects in to a union Object
@@ -539,15 +540,46 @@ func multiReader(n int, in io.Reader) ([]io.Reader, <-chan error) {
 	return readers, errChan
 }
 
-func (f *Fs) put(ctx context.Context, in io.Reader, src fs.ObjectInfo, stream bool, options ...fs.OpenOption) (fs.Object, error) {
-	srcPath := src.Remote()
-	upstreams, err := f.create(ctx, srcPath)
+func (f *Fs) selectForPut(ctx context.Context, srcPath string) (upstreams []*upstream.Fs, err error) {
+	upstreams, err = f.create(ctx, srcPath)
 	if err == fs.ErrorObjectNotFound {
 		upstreams, err = f.mkdir(ctx, parentDir(srcPath))
 	}
+	return upstreams, err
+}
+
+func (f *Fs) createForPut(ctx context.Context, srcPath string, size int64) (upstreams []*upstream.Fs, release func(), err error) {
+	if _, ok := f.createPolicy.(policy.FreeSpacePolicy); !ok || size <= 0 {
+		upstreams, err = f.selectForPut(ctx, srcPath)
+		return upstreams, func() {}, err
+	}
+
+	f.createMutex.Lock()
+	defer f.createMutex.Unlock()
+
+	upstreams, err = f.selectForPut(ctx, srcPath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	releases := make([]func(), len(upstreams))
+	for i, u := range upstreams {
+		releases[i] = u.ReserveSpace(size)
+	}
+	return upstreams, func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}, nil
+}
+
+func (f *Fs) put(ctx context.Context, in io.Reader, src fs.ObjectInfo, stream bool, options ...fs.OpenOption) (fs.Object, error) {
+	srcPath := src.Remote()
+	upstreams, release, err := f.createForPut(ctx, srcPath, src.Size())
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	if len(upstreams) == 1 {
 		u := upstreams[0]
 		var o fs.Object

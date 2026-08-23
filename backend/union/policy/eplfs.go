@@ -19,6 +19,9 @@ type EpLfs struct {
 	EpAll
 }
 
+// UsesFreeSpace marks this as a free-space create policy.
+func (p *EpLfs) UsesFreeSpace() {}
+
 var errNoUpstreamsFound = errors.New("no upstreams found with more than min_free_space space spare")
 
 func (p *EpLfs) lfs(upstreams []*upstream.Fs) (*upstream.Fs, error) {

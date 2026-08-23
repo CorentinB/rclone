@@ -17,6 +17,9 @@ type EpMfs struct {
 	EpAll
 }
 
+// UsesFreeSpace marks this as a free-space create policy.
+func (p *EpMfs) UsesFreeSpace() {}
+
 func (p *EpMfs) mfs(upstreams []*upstream.Fs) (*upstream.Fs, error) {
 	var maxFreeSpace int64
 	var mfsupstream *upstream.Fs

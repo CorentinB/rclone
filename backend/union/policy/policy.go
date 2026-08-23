@@ -13,8 +13,13 @@ import (
 
 var policies = make(map[string]Policy)
 
-// Policy is the interface of a set of defined behavior choosing
-// the upstream Fs to operate on
+// FreeSpacePolicy marks a create policy that selects upstreams using free space.
+// Union uses this marker to make placement and in-flight space reservation atomic.
+type FreeSpacePolicy interface {
+	UsesFreeSpace()
+}
+
+// Policy selects upstreams for each operation category.
 type Policy interface {
 	// Action category policy, governing the modification of files and directories
 	Action(ctx context.Context, upstreams []*upstream.Fs, path string) ([]*upstream.Fs, error)

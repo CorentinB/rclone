@@ -183,6 +183,13 @@ create_policy = mfs
 In this example, Union writes files through `fast-data-1:` and `fast-data-2:`.
 It obtains free-space values from `quota-1:` and `quota-2:`.
 
+For uploads with a known size, Union temporarily subtracts the size from the
+free space visible to create policies. Placement and reservation are atomic
+within one Union backend instance. Concurrent `mfs` uploads therefore use the
+projected free space instead of all selecting from the same stale value. Union
+releases the reservation after the upload succeeds or fails. Upload streams
+with an unknown size cannot reserve space before transfer.
+
 ### Filters
 
 Policies basically search upstream remotes and create a list of files / paths for
